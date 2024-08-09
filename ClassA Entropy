@@ -1,0 +1,225 @@
+function [ClaA_M,Entropy,pi,Theta_d] = ClsAEn(Sig, varargin)
+
+% estimates the ClassA Entropy based on Classification Angle framework of a univariate data sequence.
+
+% Returns the ClassA matrics: ClaA_M = [RAS P1 P24 P3];
+% RAS: Real Angle Sum
+% P1: Cardiac deceloration proportion
+% P24: Proportion of balanec
+% P3: Cardiac acceleration proportion
+% 
+% default parameters: 'scale' = 1; 'Formx' = 'deg'; 'K' = 4;'Typex'= 'equal'
+% [ClaA_M,Entropy] = ClsAEn(Sig, name, value, ...);
+%
+% e.g., ClsAEn(x,'scale',1,'K',3,'Typex','equal','Formx','deg','Plotx',(false));
+%
+%   using the specified name/value pair arguments:
+%       * 'scale'   - Coarse graining scale, a positive integer
+%       * 'K'   - Number of symbols, an integer > 1
+%       * 'Phasex'   - Phase space reconstruction [1 3].
+%                      one of the following methods:
+%                   * [1]    Improved Second Order Difference Plot
+%                   * [2]    Second Order Difference Plot
+%                   * [3]    Taken's theorem (m = 2)
+%       * 'Typex' - Type of mapping and symbolizing, one of the following:
+%        {'equal'(default),'kmeansc','ncdf','sigmoid','gaussian','atanh'}
+%
+%       * 'Formx'  - Format of output:
+%                * 'deg' in degree (default)
+%                * 'rad' in radians
+
+%       * 'Norm'  - Normalisation of Entropy, a boolean:
+%                 * [false]   no normalisation - default
+%                 * [true]    normalises - the number of possible symbols
+%       * 'Logx'  - Logarithm base, a positive scalar (default = exp(1))  
+%       * 'Plotx' - When 'Plotx' == 'true', returns Second-order-diffference-plot (default: false)
+%
+% reference :   Adjei, T., von Rosenberg, W., Nakamura, T., Chanwimalueang, T., & Mandic, D. P. (2019). 
+%               The classA framework: HRV based assessment of SNS and PNS dynamics without LF-HF controversies. 
+%               Frontiers in physiology, 10, 505.
+%
+% written by Hongjian Xiao, 12 Jan 2022
+
+narginchk(1,17);% number of inputs
+Sig = squeeze(Sig);
+
+p = inputParser;
+Chk = @(x) isnumeric(x) && isscalar(x) && (x > 0) && (mod(x,1)==0);
+Chk2 = {'deg','rad'};
+Chk3 = @(x) isnumeric(x) && isscalar(x) && (x > 1) && (mod(x,1)==0);
+Chk4 = @(x) isnumeric(x) && isscalar(x) && (x >= 0);
+Chk5 = {'equal','kmeansc','ncdf','sigmoid','gaussian','atanh'};
+
+addRequired(p,'Sig',@(x) isnumeric(x) && isvector(x) && (length(x) > 10));
+addParameter(p,'scale',1,Chk);
+addParameter(p,'K',4,Chk3);
+addParameter(p,'Phasex',1,@(x) ismember(x,1:3));
+addParameter(p,'Typex','equal',@(x) ischar(x) && any(validatestring(lower(x),Chk5)));
+addParameter(p,'Logx',exp(1),Chk4);
+addParameter(p,'Norm',true,@(x) islogical(x));
+addParameter(p,'Formx','deg',@(x) ischar(x) && any(validatestring(lower(x),Chk2)));
+addParameter(p,'Plotx',false,@(x) islogical(x));
+
+parse(p,Sig,varargin{:})
+scale = p.Results.scale; 
+Formx = p.Results.Formx; 
+K = p.Results.K;
+Phasex = p.Results.Phasex;
+Typex = p.Results.Typex;
+Logx = p.Results.Logx; 
+Norm = p.Results.Norm; 
+Plotx = p.Results.Plotx; 
+
+if size(Sig,1) < size(Sig,2)
+    Sig = Sig';
+end
+
+N = floor(length(Sig)/scale); % j = grains
+Sig_scale = zeros(N,1);
+
+for j = 1:N
+    Sig_scale(j) = (1/scale)*sum(Sig((j-1)*scale+1:j*scale));
+end
+
+switch Phasex
+        case 1
+            Yn = 2*Sig_scale(3:end-1) - 1.5*Sig_scale(2:end-2) - 0.5*Sig_scale(4:end);
+            Xn = 2*Sig_scale(2:end-2) - 1.5*Sig_scale(1:end-3) - 0.5*Sig_scale(3:end-1);
+        case 2
+            Yn = Sig_scale(3:end) - Sig_scale(2:end-1);
+            Xn = Sig_scale(2:end-1) - Sig_scale(1:end-2);
+        case 3            
+            Yn = Sig_scale(1:end-1);
+            Xn = Sig_scale(2:end);
+end
+
+N = length(Yn);
+
+Theta_d = atand(Yn./Xn);% in degree [-90,90]
+Theta_d(Yn<0 & Xn<0) = Theta_d(Yn<0 & Xn<0) + 180;
+Theta_d(Yn<0 & Xn>0) = Theta_d(Yn<0 & Xn>0) + 360;
+Theta_d(Yn>0 & Xn<0) = Theta_d(Yn>0 & Xn<0) + 180;
+Theta_d(isnan(Theta_d)) = 0;
+
+%classA output
+RAS = mean(Theta_d);
+No_P1 = Theta_d(Theta_d >= 0 & Theta_d < 90);
+P1 = (length(No_P1))/N;
+No_P24 = Theta_d((Theta_d >= 90 & Theta_d < 180)|(Theta_d >= 270 & Theta_d < 360));
+P24 = (length(No_P24))/N;
+No_P3 = Theta_d(Theta_d >= 180 & Theta_d < 270);
+P3 = (length(No_P3))/N;
+ClaA_M = [RAS P1 P24 P3];
+
+if  strcmpi(Formx,'rad')
+    ClaA_M = deg2rad(ClaA_M);
+end
+
+Theta_r = deg2rad(Theta_d);
+Fun = str2func(lower(Typex));
+Zi = Fun(Theta_r,K);% grouped and digitalized
+ 
+% % %2D kmeans
+%  
+% [Zx,~] = kmeans([Yn Xn],K, 'MaxIter', 200);
+% Si = zeros(1,K);
+%  for n = 1:K
+%     Si(n) = sum(~any(Zx - n,2));
+%  end
+% Zi = Zx;
+
+Si = zeros(1,K);
+ for n = 1:K
+    Si(n) = sum(~any(Zi - n,2));
+ end
+
+Si(Si==0) = [];
+pi = Si./sum(Si);
+Entropy = -sum((pi).*(log(pi)/log(Logx)));
+
+% Entropy = -sum((pi).*(log(pi)/log(Logx)))-P24;
+% Entropy = -(((pi(1).*(log(pi(1))/log(Logx)))+(pi(3).*(log(pi(3))/log(Logx))))/((pi(2).*(log(pi(2))/log(Logx)))+(pi(4).*(log(pi(4))/log(Logx)))));
+
+
+if Norm
+    Entropy = Entropy/(log(K)/log(Logx));
+end
+
+if Plotx   
+     Cols = zeros(K,3);
+    for i = 1:1:K
+        Cols(i,:) = getColor(i, 1, K+1,winter);
+    end
+    Limx = (max(abs([Yn; Xn])))*1.1;   
+    figure;
+    
+%     hold on
+%     p_k = linspace(0,360,K+1);
+%     p_k_r = linspace(0,2*pi,K+1);
+%     for j = 1:1:K
+%     plot(Xn((Theta_d >= p_k(j) & Theta_d < p_k(j+1))),Yn((Theta_d >= p_k(j) & Theta_d < p_k(j+1))),'.','Color',Cols(j,:));
+%     plot([0,Limx*sqrt(2)*cos(p_k_r(j+1))],[0,Limx*sqrt(2)*sin(p_k_r(j+1))],'--','Color',Cols(j,:));
+%     end
+        
+        hold on
+        for j = 1:1:K
+             plot(Xn(Zi==j),Yn(Zi==j),'.','Color',Cols(j,:));
+        end
+        
+    axis([-Limx Limx -Limx Limx],'square');
+    xticks([-Limx 0 Limx]), yticks([-Limx 0 Limx]); 
+    switch Phasex
+        case 1
+            ylabel('2x(n + 2\tau)  -  1.5x(n + \tau) - 0.5x(n + 3\tau)');
+            xlabel('2x(n + \tau)  -  1.5x(n) - 0.5x(n + 2\tau)');
+            title('Improved Second Order Difference Plot');
+        case 2
+            ylabel('x(n + 2\tau)  -  x(n + \tau)');
+            xlabel('x(n + \tau)  -  x(n)');
+            title('Original Second Order Difference Plot');
+        case 3
+            ylabel('x(n + \tau)');
+            xlabel('x(n)');
+            title('Poincare Plot');
+    end
+    
+    box on
+    grid on
+    
+end
+
+end
+
+
+function [y] = equal(x,c)
+y = discretize(x,linspace(0,2*pi,c+1));
+end
+
+function [y] = kmeansc(x,c)
+[y,~] = kmeans(x,c,'MaxIter',200);
+end
+
+function [y] = ncdf(x,c)
+Zx = normcdf(x,mean(x),std(x,1));
+y = discretize(Zx,linspace(0,1,c+1)); 
+end
+
+function [y] = sigmoid(x,c)
+r = [1.5*std(x) 2];
+Zx = 1./(1+exp((x-r(2))/r(1)));
+y = discretize(Zx,linspace(0,1,c+1)); 
+end
+
+function [y] = gaussian(x,c)
+x = normalize(x);
+r = [std(x) 2];
+Zx = exp(-(x.^r(2))/r(1));
+y = discretize(Zx,linspace(min(Zx),max(Zx),c+1));
+end
+
+function [y] = atanh(x,c)
+r = [0.5*std(x) 2];
+Zx = atan(tanh(r(1)./x));
+Zx = Zx/max(Zx);
+y = discretize(Zx,linspace(-1,1,c+1)); 
+end
